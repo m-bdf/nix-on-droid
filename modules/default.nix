@@ -16,7 +16,8 @@ let
   configModule =
     if config != null then config
     else if builtins.pathExists defaultConfigFile then defaultConfigFile
-    else pkgs.config.nix-on-droid or (throw "No config file found! Create one in ~/.config/nixpkgs/nix-on-droid.nix");
+    else pkgs.config.nix-on-droid or
+      (throw "No config file found! Create one in ~/.config/nixpkgs/nix-on-droid.nix");
 
   nodModules = import ./module-list.nix {
     inherit pkgs home-manager-path isFlake targetSystem;
@@ -28,16 +29,26 @@ let
     class = "nixOnDroid";
   };
 
-  failedAssertions = map (x: x.message) (filter (x: !x.assertion) rawModule.config.assertions);
+  moduleChecks = rawModule:
+    let
+      failedAssertions = map (x: "- ${x.message}")
+        (filter (x: !x.assertion) rawModule.config.assertions);
+    in
+    throwIf (failedAssertions != [ ])
+      "\nFailed assertions:\n${concatLines failedAssertions}"
+      (showWarnings rawModule.config.warnings rawModule);
 
-  module =
-    if failedAssertions != [ ]
-    then throw "\nFailed assertions:\n${concatMapStringsSep "\n" (x: "- ${x}") failedAssertions}"
-    else showWarnings rawModule.config.warnings rawModule;
+  withExtraAttrs = rawModule:
+    let
+      module = moduleChecks rawModule;
+    in
+    module // {
+      inherit (module._module.args) pkgs;
+      inherit (module.config.build) activationPackage;
+
+      extendModules = args:
+        withExtraAttrs (rawModule.extendModules args);
+    };
 in
 
-{
-  inherit (module.config.build) activationPackage;
-  inherit (module) config options;
-  inherit pkgs;
-}
+withExtraAttrs rawModule
